@@ -455,7 +455,7 @@ Lemma WellTyped_context_equal :
     WellTyped n Gamma' Delta' e tau.
 Proof.
   intros n Gamma Delta e tau He.
-  induction He; intros Gamma' Delta' HGamma HDelta;
+  induction He; intros Gamma' Delta0 HGamma HDelta;
     try (econstructor; eauto;
       try apply IHHe;
       try apply IHHe1;

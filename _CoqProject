@@ -1,2 +1,3 @@
 -Q src Qoreo
-src/local.v
+src/Quantum.v
+src/Choreography.v

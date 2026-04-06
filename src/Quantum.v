@@ -5,6 +5,7 @@ Declare Scope qoreo.
 Module Var.
   Module Export V := OrderedTypeEx.UOT_to_OT (OrderedTypeEx.Nat_as_OT).
   Definition t := V.t.
+  Definition eq_dec : forall (x y : t), {x=y} + {x <> y} := eq_nat_dec.
   
   Module Map := FSets.FMapList.Make(V).
   Module MapFacts := FMapFacts.Properties(Map).
@@ -108,29 +109,29 @@ Inductive Fresh x : expr -> Prop :=
 (* Assume x is fresh in e, and v is closed *)
 Fixpoint subst x v e :=
   match e with
-  | Var y => if Var.V.eq_dec x y then v else Var y
+  | Var y => if Var.eq_dec x y then v else Var y
   | LetIn y e1 e2 =>
-    LetIn y (subst x v e1) (if Var.V.eq_dec x y then e2 else subst x v e2)
+    LetIn y (subst x v e1) (if Var.eq_dec x y then e2 else subst x v e2)
   | Bang e => Bang (subst x v e)
   | LetBang y e1 e2 =>
-    LetBang y (subst x v e1) (if Var.V.eq_dec x y then e2 else subst x v e2)
+    LetBang y (subst x v e1) (if Var.eq_dec x y then e2 else subst x v e2)
   | Bit b => Bit b
   | If e e1 e2 => If (subst x v e) (subst x v e1) (subst x v e2)
   | Pair e1 e2 => Pair (subst x v e1) (subst x v e2)
   | LetPair y1 y2 e1 e2 =>
     LetPair y1 y2 (subst x v e1)
-      (if Var.V.eq_dec x y1 then e2
-       else if Var.V.eq_dec x y2 then e2
+      (if Var.eq_dec x y1 then e2
+       else if Var.eq_dec x y2 then e2
        else subst x v e2)
   | Meas e => Meas (subst x v e)
   | QRef q => QRef q
   | New e => New (subst x v e)
   | Unitary u e => Unitary u (subst x v e)
   | Lambda y e =>
-    Lambda y (if Var.V.eq_dec x y then e else subst x v e)
+    Lambda y (if Var.eq_dec x y then e else subst x v e)
   | Fix f y e =>
-    Fix f y (if Var.V.eq_dec x f then e
-             else if Var.V.eq_dec x y then e
+    Fix f y (if Var.eq_dec x f then e
+             else if Var.eq_dec x y then e
              else subst x v e)
   | App e1 e2 => App (subst x v e1) (subst x v e2)
   end.
@@ -498,6 +499,26 @@ Lemma dim_weakening : forall n n' Γ Δ e τ,
   WellTyped n' Γ Δ e τ.
 Admitted.
 
+About Var.MapFacts.Partition.
+(* If Δ(x0)=τ0 and Δ==Δ1,Δ2 and x ∉ Δ2 then Δ1(x0)=τ0 *)
+Lemma partition_not_in_r : forall Δ Δ2 Δ1 x (τ : typ),
+  Var.Map.MapsTo x τ Δ ->
+  Var.MapFacts.Partition Δ Δ1 Δ2 ->
+  ~ (Var.Map.In x Δ2) ->
+  Var.Map.MapsTo x τ Δ1.
+Proof.
+  intros ? ? ? x τ Hx [Hdisjoint Hmapsto] Hnotin.
+  apply Hmapsto in Hx.
+  destruct Hx; auto.
+  * contradict Hnotin. Search Var.Map.MapsTo Var.Map.In.
+    exists τ; auto.
+Qed.
+
+Lemma partition_remove : forall {A} x0 (Δ Δ1 Δ2 : Var.Map.t A),
+  Var.MapFacts.Partition Δ Δ1 Δ2 ->
+  Var.MapFacts.Partition (Var.Map.remove x0 Δ) (Var.Map.remove x0 Δ1) (Var.Map.remove x0 Δ2).
+Admitted.
+
 Lemma wt_subst : forall τ n Γ Δ x v e τ',
   WellTyped n Γ Δ e τ' ->
   Val v ->
@@ -517,7 +538,7 @@ Proof.
           apply Var.MapFacts.F.empty_mapsto_iff in Hcontra; contradiction.
       }
       destruct Heq; subst.
-      destruct (Var.V.eq_dec x0 x0) as [Heq | Hneq].
+      destruct (Var.eq_dec x0 x0) as [Heq | Hneq].
       2:{ contradict Hneq. reflexivity. }
       setoid_replace (Var.Map.remove x0 Δ) with (Var.Map.empty typ).
       2:{
@@ -539,19 +560,57 @@ Proof.
         rewrite H0 in HMapsTo. 
         inversion HMapsTo.
 
-    * apply (WTLetIn τ (Var.Map.remove x0 Δ1) (Var.Map.remove x0 Δ2)); auto.
-      + eapply IHHWT1; eauto.
-        admit (* If Δ(x0)=τ0 and Δ==Delt1,Δ2 and x ∉ Δ2 then Δ1(x0)=τ0 *).
-      + admit.
-      + admit (* partition wrt remove function *).
-      + Search Var.Map.In Var.Map.remove. 
-        rewrite Var.MapFacts.F.remove_in_iff.
-        admit.
+    * 
+
+      assert (Hmapsto :
+              (Var.Map.MapsTo x0 τ0 Δ1 /\ ~ Var.Map.In x0 Δ2)
+            \/ (Var.Map.MapsTo x0 τ0 Δ2 /\ ~ Var.Map.In x0 Δ1)).
+      {
+        destruct H0 as [Hdisj Hiff].
+        apply Hiff in Hindom.
+        destruct Hindom; [left | right]; split; auto.
+        { intros Hin.
+          apply (Hdisj x0).
+          split; auto. eexists; eauto.
+        }
+        {
+          intros Hin.
+          apply (Hdisj x0).
+          split; auto. eexists; eauto.
+        }
+      }
+      admit. (*
+      destruct (Var.eq_dec x0 x) eqn:Heq.
+      ** subst.
+        apply (WTLetIn τ (Var.Map.remove x Δ1) (Var.Map.remove x Δ2)); auto.
+        + eapply IHHWT1; eauto.
+          eapply partition_not_in_r; eauto.
+        + setoid_replace (Var.Map.add x τ (Var.Map.remove x Δ2)) with (Var.Map.add x τ Δ2); auto.
+          { admit (* add x0 τ (remove x0 Δ2) = add x0 τ Δ2 *). }
+        + apply partition_remove; auto.
+        + apply Var.Map.remove_1; auto.
+      **
+        destruct H0 as [Hdisj Hiff].
+        apply Hiff in Hindom.
+      
+    apply (WTLetIn τ (Var.Map.remove x0 Δ1) (Var.Map.remove x0 Δ2)); auto.
+        + admit (*?*).
+          (* eapply IHHWT1; eauto.
+          eapply partition_not_in_r; eauto.*)
+        + setoid_replace (Var.Map.add x τ (Var.Map.remove x0 Δ2)) with (Var.Map.remove x0 (Var.Map.add x τ Δ2)).
+          2:{ admit. }
+          eapply IHHWT2; eauto.
+          admit (*?*)
+        +
+        +
+
+         *)
+        
 
     * simpl; econstructor; eauto.
       admit (* lemma *).
     * (*let!*) admit.
-    *  contradict Hindom. admit.
+    * contradict Hindom. admit.
     * (* if *)  admit.
     * (* Pair *)  admit.
     * (* LetPair *) admit.

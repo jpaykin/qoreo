@@ -1,53 +1,27 @@
 From Stdlib Require Import FSets.FMapList FSets.FSetList FSets.FMapFacts OrderedType OrderedTypeEx.
 From QuantumLib Require Import Matrix Pad Quantum.
+From Qoreo Require Import Base.
 
-Declare Scope qoreo.
-Module Var.
-  Module Export V := OrderedTypeEx.UOT_to_OT (OrderedTypeEx.Nat_as_OT).
-  Definition t := V.t.
-  Definition eq_dec : forall (x y : t), {x=y} + {x <> y} := eq_nat_dec.
-  
-  Module Map := FSets.FMapList.Make(V).
-  Module MapFacts := FMapFacts.Properties(Map).
-  Module FSet := FSets.FSetList.Make(V).
-
-  #[export] Existing Instance MapFacts.F.EqualSetoid.
-
-  Definition domain {A} (m : Map.t A) : FSet.t :=
-    let f := fun x _ s => FSet.add x s in
-    Map.fold f m FSet.empty.
-
-  Definition Singleton {A} x a (m : Map.t A) : Prop :=
-    Map.Equal m (Map.add x a (Map.empty _)).
-
-End Var.
 Open Scope qoreo.
 
-
-Definition var := Var.t.
-Definition qref := nat.
-
-Inductive unitary :=
-| H | X | Y | Z | CNOT | SGATE | Sdag | TGATE | Tdag.
-
-Inductive expr :=
-| Var : var -> expr
-| LetIn : var -> expr -> expr -> expr
-| Bang : expr -> expr
-| LetBang : var -> expr -> expr -> expr
-| Bit : bool -> expr
-| If : expr -> expr -> expr -> expr
-| Pair : expr -> expr -> expr
-| LetPair : var -> var -> expr -> expr -> expr
-| Meas : expr -> expr
-| QRef : qref -> expr
-| New : expr -> expr
-| Unitary : unitary -> expr -> expr
-| Lambda : var -> expr -> expr
-| Fix : var -> var -> expr -> expr
-| App : expr -> expr -> expr
+Inductive t :=
+| Var : Var.t -> t
+| LetIn : Var.t -> t -> t -> t
+| Bang : t -> t
+| LetBang : Var.t -> t -> t -> t
+| Bit : bool -> t
+| If : t -> t -> t -> t
+| Pair : t -> t -> t
+| LetPair : Var.t -> Var.t -> t -> t -> t
+| Meas : t -> t
+| QRef : qref -> t
+| New : t -> t
+| Unitary : unitary -> t -> t
+| Lambda : Var.t -> t -> t
+| Fix : Var.t -> Var.t -> t -> t
+| App : t -> t -> t
 .
-Inductive Val : expr -> Prop :=
+Inductive Val : t -> Prop :=
 | QRefVal : forall q, Val (QRef q)
 | BangVal : forall e, Val (Bang e)
 | BitVal  : forall b, Val (Bit b)
@@ -61,8 +35,7 @@ Inductive Val : expr -> Prop :=
 (* Operational Semantics *)
 (*************************)
 
-
-Inductive Fresh x : expr -> Prop :=
+Inductive Fresh x : Expr.t -> Prop :=
 | FVar : forall y, ~ Var.V.eq x y -> Fresh x (Var y)
 | FLetIn : forall y e1 e2,
   Fresh x e1 ->
@@ -136,100 +109,10 @@ Fixpoint subst x v e :=
   | App e1 e2 => App (subst x v e1) (subst x v e2)
   end.
 
-Module Config.
-  Record t := {
-    dim : nat;
-    qstate : Matrix dim dim
-  }.
-  (* Definition add x (v : expr) (cfg : t) : t :=
-  {|
-    state := Var.Map.add x v (state cfg);
-    dim := dim cfg;
-    qstate := qstate cfg
-  |}. *)
-  (* Definition find x (cfg : t) : option expr :=
-    Var.Map.find x (state cfg). *)
-
-
-  (* Project onto the state where qubit q is in the classical state |b> *)
-  (*Definition proj q dim (b : bool) := pad_u dim q (bool_to_matrix b).*)
-  Definition measure (b : bool) (q : qref) (cfg : t) : t :=
-    let rho' := super (pad_u q (dim cfg) (bool_to_matrix b)) (qstate cfg) in
-    {|
-      dim := dim cfg;
-      qstate := rho'
-    |}.
-    
-  Definition new (b : bool) (cfg : t) : qref * t :=
-    let q := dim cfg in
-    let rho' := kron (qstate cfg) (bool_to_ket b) in
-    (q, {|
-      dim := 1 + dim cfg;
-      qstate := rho'
-    |}).
-
-  Definition apply_matrix (cfg : t) (U : Matrix (2 ^ dim cfg) (2 ^ dim cfg)) : t :=
-  {|
-    dim := dim cfg;
-    qstate := super U (qstate cfg)
-  |}.
-  
-
-  Definition epr (cfg : t) : qref * qref * t :=
-    let q1 := dim cfg in
-    let q2 := (1 + q1)%nat in
-    let bell00 := Quantum.EPRpair † × Quantum.EPRpair in
-    let rho' := kron (qstate cfg) bell00 in
-    (q1, q2, {|
-      dim := 2 + dim cfg;
-      qstate := rho'
-    |}).
-
-
-  Definition gate_to_matrix (n : nat) (U : unitary) (qs : list qref) : Matrix (2^n) (2^n) :=
-  match U, qs with
-  | H, [q] => @pad 1 q n Quantum.hadamard
-  | X, [q] => @pad 1 q n Quantum.σx
-  | Y, [q] => @pad 1 q n Quantum.σy
-  | Z, [q] => @pad 1 q n Quantum.σz
-  | CNOT, [q1; q2] => pad_ctrl n q1 q2 Quantum.σx
-  | SGATE, [q] => @pad 1 q n Quantum.Sgate
-  | Sdag, [q]  => @pad 1 q n Quantum.Sgate†
-  | TGATE, [q] => @pad 1 q n Quantum.Tgate
-  | Tdag, [q]  => @pad 1 q n Quantum.Tgate†
-  | _, _ => Zero
-  end.
-  Definition apply_gate (U : unitary) (qs : list qref) (cfg : t) : t :=
-    apply_matrix cfg (gate_to_matrix _ U qs).
-
-    
-  Lemma test1 : gate_to_matrix 2 CNOT [0;1]%nat = cnot.
-  Proof.
-    assert (H : WF_Matrix (gate_to_matrix 2 CNOT [0%nat; 1%nat])).
-    { simpl.
-      set (H0 := QuantumLib.Pad.WF_pad_ctrl 2 0 1 σx).
-      apply H0.
-      auto with wf_db.
-    }
-    prep_matrix_equality.
-    destruct x as [ | [ | [ | [ | x ]]]];
-    destruct y as [ | [ | [ | [ | y ]]]];
-      try (rewrite H; [ auto | right; simpl; lia]; fail);
-      try (rewrite H; [ auto | left; simpl; lia]; fail);
-      try lca.
-  Qed.
-
-  Lemma test2 :gate_to_matrix 1 H [0]%nat = hadamard.
-  Proof.
-    simpl. unfold pad. simpl. Msimpl; auto.
-  Qed.
-
-
-End Config.
 
 Reserved Notation "cfg1 ~> cfg2" (at level 55).
 
-Inductive step : expr * Config.t -> expr * Config.t -> Prop :=
+Inductive step : Expr.t * Config.t -> Expr.t * Config.t -> Prop :=
 
 (* Let *)
 | LetC : forall x e1 e2 cfg e1' e2' cfg',
@@ -353,7 +236,7 @@ end.
 (* Typing judgment: n; Γ; Δ ⊢ t : τ 
  * Here, n is maximum number of qubit references currently in scope
  *)
-Inductive WellTyped {n : nat} : Var.Map.t typ -> Var.Map.t typ -> expr -> typ -> Prop :=
+Inductive WellTyped {n : nat} : Var.Map.t typ -> Var.Map.t typ -> Expr.t -> typ -> Prop :=
 
 | WTQVar : forall Γ Δ x τ,
   Var.Singleton x τ Δ ->
@@ -455,7 +338,7 @@ Arguments WellTyped : clear implicits.
 
 Hint Constructors WellTyped : qoreo_db.
 (* TODO: The stronger statement would be 
-to define alpha equivalence for expressions
+to define alpha equivalence for Expr.tessions
 and then to prove this with respect to
     Var.Map.Equiv alpha_equiv
 *)
@@ -511,7 +394,6 @@ Lemma dim_weakening : forall n n' Γ Δ e τ,
   WellTyped n' Γ Δ e τ.
 Admitted.
 
-About Var.MapFacts.Partition.
 (* If Δ(x0)=τ0 and Δ==Δ1,Δ2 and x ∉ Δ2 then Δ1(x0)=τ0 *)
 Lemma partition_not_in_r : forall Δ Δ2 Δ1 x (τ : typ),
   Var.Map.MapsTo x τ Δ ->
@@ -522,7 +404,7 @@ Proof.
   intros ? ? ? x τ Hx [Hdisjoint Hmapsto] Hnotin.
   apply Hmapsto in Hx.
   destruct Hx; auto.
-  * contradict Hnotin. Search Var.Map.MapsTo Var.Map.In.
+  * contradict Hnotin.
     exists τ; auto.
 Qed.
 
@@ -542,9 +424,9 @@ Proof.
     revert τ x v.
     induction HWT; intros τ0 x0 v0 Hvalv0 HWTv0 Hindom;
       simpl.
-    * unfold Var.Singleton in H0.
+    * unfold Var.Singleton in H.
       assert (Heq : x = x0 /\ τ = τ0).
-      { rewrite H0 in Hindom.
+      { rewrite H in Hindom.
           apply Var.MapFacts.F.add_mapsto_iff in Hindom.
           destruct Hindom as [ | [_ Hcontra]]; auto.
           apply Var.MapFacts.F.empty_mapsto_iff in Hcontra; contradiction.
@@ -554,7 +436,7 @@ Proof.
       2:{ contradict Hneq. reflexivity. }
       setoid_replace (Var.Map.remove x0 Δ) with (Var.Map.empty typ).
       2:{
-        rewrite H0.
+        rewrite H.
         apply Var.MapFacts.F.Equal_mapsto_iff;
           intros x τ.
         rewrite Var.MapFacts.F.remove_mapsto_iff.
@@ -566,10 +448,10 @@ Proof.
       apply weakening; auto.
 
     * contradict Hindom.
-        apply (Var.MapFacts.elements_Empty Δ) in H0.
+        apply (Var.MapFacts.elements_Empty Δ) in H.
         intros HMapsTo.
         apply Var.Map.elements_1 in HMapsTo.
-        rewrite H0 in HMapsTo. 
+        rewrite H in HMapsTo. 
         inversion HMapsTo.
 
     * 
@@ -578,7 +460,7 @@ Proof.
               (Var.Map.MapsTo x0 τ0 Δ1 /\ ~ Var.Map.In x0 Δ2)
             \/ (Var.Map.MapsTo x0 τ0 Δ2 /\ ~ Var.Map.In x0 Δ1)).
       {
-        destruct H0 as [Hdisj Hiff].
+        destruct H as [Hdisj Hiff].
         apply Hiff in Hindom.
         destruct Hindom; [left | right]; split; auto.
         { intros Hin.
@@ -627,7 +509,7 @@ Proof.
     * (* Pair *)  admit.
     * (* LetPair *) admit.
     * (* Bang *) contradict Hindom. admit.
-    * (* QRef *) (* Maybe our typing judgment should also have a list of qubit variables in scope... *) admit.
+    * (* QRef *) (* Maybe our typing judgment should also have a list of qubit Var.tiables in scope... *) admit.
     * (* new *) econstructor; eauto.
     * (* Unitary *) econstructor; eauto.
     * (* Lambda *) admit.

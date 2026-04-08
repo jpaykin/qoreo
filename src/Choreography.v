@@ -1,122 +1,123 @@
-From Qoreo Require Quantum.
+From Qoreo Require Import Base.
+From Qoreo Require Expr.
 
 From Stdlib Require Lists.List.
 Import List.ListNotations.
 Open Scope list_scope.
-Require Import Coq.Structures.Equalities.
+From Stdlib Require Import Structures.Equalities.
 
-Module Choreography (Actor : DecidableType).
-    Inductive insn : Type :=
+Module Insn.
+    Inductive t : Type :=
 
-    | Send : Actor.t -> Quantum.expr -> Actor.t -> Quantum.var -> insn
-    | EPR : Actor.t -> Quantum.var -> Actor.t -> Quantum.var -> insn
+    | Send : Actor.t -> Expr.t -> Actor.t -> Var.t -> t
+    | EPR : Actor.t -> Var.t -> Actor.t -> Var.t -> t
 
-    | Let : Actor.t -> Quantum.var -> Quantum.expr -> insn
-    | LetBang : Actor.t -> Quantum.var -> Quantum.expr -> insn
-    | LetPair : Actor.t -> Quantum.var -> Quantum.var -> Quantum.expr -> insn.
-    Definition t := list insn.
+    | Let : Actor.t -> Var.t -> Expr.t -> t
+    | LetBang : Actor.t -> Var.t -> Expr.t -> t
+    | LetPair : Actor.t -> Var.t -> Var.t -> Expr.t -> t.
 
-    Definition actorsI (I : insn) : list Actor.t :=
+
+    Definition actors (I : t) : Actor.FSet.t :=
         match I with
-        | Send A _ B _ => [ A ; B ]
-        | EPR A _ B _ => [A;B]
-        | Let A _ _ => [A]
-        | LetBang A _ _ => [A]
-        | LetPair A _ _ _ => [A]
+        | Send A _ B _ | EPR A _ B _ => Actor.FSet.add A (Actor.FSet.singleton B)
+        | Let A _ _ | LetBang A _ _ | LetPair A _ _ _ => Actor.FSet.singleton A
         end.
 
-    Definition actors (C : t) : list Actor.t :=
-        List.fold_right (fun I => List.app (actorsI I)) [] C.
+    
+(* substitute the value v for A.x in I *)
+    Definition subst (A : Actor.t) (x : Var.t) (v : Expr.t)  (I : t) : t :=
+    match I with
+    | Send B1 e B2 y => 
+        (* Assume x <> y *)
+        let e' := if Actor.eq_dec A B1 then Expr.subst x v e else e in
+        Send B1 e' B2 y
+    | EPR B1 y1 B2 y2 => EPR B1 y1 B2 y2
+    | Let B y e =>
+        let e' := if Actor.eq_dec A B then Expr.subst x v e else e in
+        Let B y e'
+    | LetBang B y e =>
+        let e' := if Actor.eq_dec A B then Expr.subst x v e else e in
+        LetBang B y e'
+    | LetPair B y1 y2 e =>
+        let e' := if Actor.eq_dec A B then Expr.subst x v e else e in
+        LetPair B y1 y2 e'
+    end.
+End Insn.
 
-    Inductive label :=
-    | sendL : Actor.t -> Quantum.expr -> Actor.t -> label
-    | eprL  : Actor.t -> Actor.t -> label
-    | localL : Actor.t -> label
+Module Choreography.
+    Definition t := list Insn.t.
+
+    Definition actors (C : t) : Actor.FSet.t :=
+        List.fold_left (fun X I => Actor.FSet.union X (Insn.actors I)) C Actor.FSet.empty.
+
+
+    Definition subst    (A : Actor.t) (x : Var.t) (v : Expr.t)
+                        (C : t) : t :=
+        List.map (Insn.subst A x v) C.
+End Choreography.
+
+Module Label.
+    Inductive t :=
+    | Send : Actor.t -> Expr.t -> Actor.t -> t
+    | EPR  : Actor.t -> Actor.t -> t
+    | Loc  : Actor.t -> t
     .
 
-    Definition actorsL (l : label) : list Actor.t :=
+
+    Definition actors (l : t) : Actor.FSet.t :=
         match l with
-        | sendL A _ B => [A;B]
-        | eprL A B => [A; B]
-        | localL A => [A]
+        | Send A _ B | EPR A B => Actor.FSet.add A (Actor.FSet.singleton B)
+        | Loc A => Actor.FSet.singleton A
         end.
-
-    Definition disjoint (ls1 ls2 : list Actor.t) : Prop :=
-        List.Forall (fun a => ~ List.In a ls2) ls1.
-
+End Label.
 
 
 
 (** Semantics **)
 
-(* substitute the value v for A.x in I *)
-    Definition substI (A : Actor.t) (x : Quantum.var) (v : Quantum.expr)  (I : insn) : insn :=
-    match I with
-    | Send B1 e B2 y => 
-        (* Assume x <> y *)
-        let e' := if Actor.eq_dec A B1 then Quantum.subst x v e else e in
-        Send B1 e' B2 y : insn
-    | EPR B1 y1 B2 y2 => EPR B1 y1 B2 y2
-    | Let B y e =>
-        let e' := if Actor.eq_dec A B then Quantum.subst x v e else e in
-        Let B y e'
-    | LetBang B y e =>
-        let e' := if Actor.eq_dec A B then Quantum.subst x v e else e in
-        LetBang B y e'
-    | LetPair B y1 y2 e =>
-        let e' := if Actor.eq_dec A B then Quantum.subst x v e else e in
-        LetPair B y1 y2 e'
-    end.
 
-    Definition subst    (A : Actor.t) (x : Quantum.var) (v : Quantum.expr)
-                        (C : t) : t :=
-        List.map (substI A x v) C.
-
-
-Inductive step : t * Quantum.Config.t -> label -> t * Quantum.Config.t -> Prop :=
+Inductive step : Choreography.t * Config.t -> Label.t -> Choreography.t * Config.t -> Prop :=
 
 | SendC : forall A e B x C cfg e' cfg',
-    Quantum.step (e, cfg) (e', cfg') ->
-    step (Send A e B x :: C, cfg) (localL A) (Send A e' B x :: C, cfg')
+    Expr.step (e, cfg) (e', cfg') ->
+    step (Insn.Send A e B x :: C, cfg) (Label.Loc A) (Insn.Send A e' B x :: C, cfg')
 
 | SendB : forall A v B x C cfg C',
-    Quantum.Val v ->
-    C' = subst B x v C ->
-    step (Send A v B x :: C, cfg) (sendL A v B) (C', cfg)
+    Expr.Val v ->
+    C' = Choreography.subst B x v C ->
+    step (Insn.Send A v B x :: C, cfg) (Label.Send A v B) (C', cfg)
 
 | EPRB : forall q1 q2 A x B y C cfg C' cfg',
-    Quantum.Config.epr cfg = (q1,q2,cfg') ->
-    C' = subst A x (Quantum.QRef q1) (subst B y (Quantum.QRef q2) C) ->
-    step (EPR A x B y :: C, cfg) (eprL A B) (C', cfg')
+    Config.epr cfg = (q1,q2,cfg') ->
+    C' = Choreography.subst A x (Expr.QRef q1) (Choreography.subst B y (Expr.QRef q2) C) ->
+    step (Insn.EPR A x B y :: C, cfg) (Label.EPR A B) (C', cfg')
 
 | LetC : forall A x e C cfg e' cfg',
-    Quantum.step (e,cfg) (e',cfg') ->
-    step (Let A x e :: C, cfg) (localL A) (Let A x e' :: C, cfg')
+    Expr.step (e,cfg) (e',cfg') ->
+    step (Insn.Let A x e :: C, cfg) (Label.Loc A) (Insn.Let A x e' :: C, cfg')
 | LetB : forall A x v C cfg C',
-    Quantum.Val v ->
-    C' = subst A x v C ->
-    step (Let A x v :: C, cfg) (localL A) (C', cfg)
+    Expr.Val v ->
+    C' = Choreography.subst A x v C ->
+    step (Insn.Let A x v :: C, cfg) (Label.Loc A) (C', cfg)
 
 | LetBangC : forall A x e C cfg e' cfg',
-    Quantum.step (e,cfg) (e',cfg') ->
-    step (LetBang A x e :: C, cfg) (localL A) (LetBang A x e' :: C, cfg')
+    Expr.step (e,cfg) (e',cfg') ->
+    step (Insn.LetBang A x e :: C, cfg) (Label.Loc A) (Insn.LetBang A x e' :: C, cfg')
 | LetBangB : forall A x e0 C cfg C',
-    C' = subst A x e0 C ->
-    step (LetBang A x (Quantum.Bang e0) :: C, cfg) (localL A) (C', cfg)
+    C' = Choreography.subst A x e0 C ->
+    step (Insn.LetBang A x (Expr.Bang e0) :: C, cfg) (Label.Loc A) (C', cfg)
 
 | LetPairC : forall A x1 x2 e C cfg e' cfg',
-    Quantum.step (e,cfg) (e',cfg') ->
-    step (LetPair A x1 x2 e :: C, cfg) (localL A) (LetPair A x1 x2 e' :: C, cfg')
+    Expr.step (e,cfg) (e',cfg') ->
+    step (Insn.LetPair A x1 x2 e :: C, cfg) (Label.Loc A) (Insn.LetPair A x1 x2 e' :: C, cfg')
 | LetPairB : forall A x1 x2 v1 v2 C cfg C',
-    Quantum.Val v1 -> Quantum.Val v2 ->
-    C' = subst A x1 v1 (subst A x2 v2 C) ->
-    step (LetPair A x1 x2 (Quantum.Pair v1 v2) :: C, cfg) (localL A) (C', cfg)
+    Expr.Val v1 -> Expr.Val v2 ->
+    C' = Choreography.subst A x1 v1 (Choreography.subst A x2 v2 C) ->
+    step (Insn.LetPair A x1 x2 (Expr.Pair v1 v2) :: C, cfg) (Label.Loc A) (C', cfg)
 
 (* delay *)
 | Delay : forall I C cfg C' cfg' l,
     step (C, cfg) l (C', cfg') ->
-    disjoint (actorsL l) (actorsI I) ->
+    Actor.FSet.Empty (Actor.FSet.inter (Label.actors l) (Insn.actors I)) ->
     step (I::C, cfg) l (I::C', cfg')
 .
-
-End Choreography.

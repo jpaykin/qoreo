@@ -11,3 +11,16 @@ Qoreo uses the QuantumLib library for formalizing quantum computing (https://git
 ```
 opam pin coq-quantumlib https://github.com/jpaykin/QuantumLib.git#jpaykin/v9.1
 ```
+
+Once dependencies have been installed, build the Qoreo repository using `make`. The workflow uses CoqMakefile.
+
+# Structure
+
+To add a new Rocq `.v` file, add it to the `src/` subdirectory and add it to the list of filenames in the `_CoqProject` file.
+
+Qoreo uses the OCaml/Rocq concept of modules to define data structures. The variables in `src/Base.v` are a good example: they are defined in a module `Var`, and the type of such variables is `Var.t`. Other helper functions such as decidable equality of variables are also defined in this module (`Var.eq_dec`). Modules can be nested, e.g. `Var.FSet.t` is the type of finite sets of variables.
+
+* `src/Base.v` - Variables `Var.t`; quantum references `qref` and unitaries; quantum states `Config.t`; and actors `Actor.t`.
+* `src/Expr.v` - The definition of the local quantum language language.
+* `src/Choreography.v` - The definition of the choreographic language.
+* `src/Network.v` - The definition of the network language.
